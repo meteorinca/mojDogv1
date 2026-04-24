@@ -27,110 +27,200 @@ static QueueHandle_t button_evt_queue = NULL;
 // --- OLED SPI Display ---
 static esp_lcd_panel_handle_t panel_handle = NULL;
 
+// Helper: pack RGB565 (5-6-5 big-endian for ST7789)
+static inline uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
+    return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+}
+
+// Simple fast pseudo-random (xorshift) – cheaper than rand() per-pixel
+static uint32_t xor_state = 123456789;
+static inline uint32_t fast_rand(void) {
+    xor_state ^= xor_state << 13;
+    xor_state ^= xor_state >> 17;
+    xor_state ^= xor_state << 5;
+    return xor_state;
+}
+
 static void dog_eyes_task(void *arg) {
     uint16_t *buffer = malloc(160 * 80 * sizeof(uint16_t));
     if (!buffer) {
         ESP_LOGE(TAG, "No mem for eyes");
         vTaskDelete(NULL);
     }
-    
+
     int blink_timer = 0;
     int next_blink = 50 + (rand() % 100);
     bool blinking = false;
-    
-    while(1) {
+    int frame_count = 0;
+
+    // Shared gaze for both eyes
+    static int pupil_dx = 0;
+    static int pupil_dy = 0;
+    static int pupil_target_dx = 0;
+    static int pupil_target_dy = 0;
+
+    /* ---- Eye geometry (two eyes side-by-side on 160x80) ---- */
+    // Left eye center, Right eye center
+    const int eye_cx[2] = { 40, 120 };
+    const int eye_cy = 40;
+    const int eye_rx = 34;  // horizontal radius of each eye ellipse
+    const int base_ry = 32; // vertical radius (before blink)
+    const int iris_r  = 18; // iris radius
+    const int base_pupil_r = 7; // base pupil radius
+
+    while (1) {
+        frame_count++;
+
+        /* ---- Blink logic ---- */
         blink_timer++;
         if (!blinking && blink_timer > next_blink) {
             blinking = true;
             blink_timer = 0;
         }
-
         if (force_blink) {
             blinking = true;
             blink_timer = 0;
             force_blink = false;
         }
-        
-        int cx = 80;
-        int cy = 40;
-        int max_rx = 60;
-        int max_ry = 35;
-        
+
+        int max_ry = base_ry;
         if (blinking) {
-            max_ry = 4; // close the eye completely
+            max_ry = 3;
             if (blink_timer > 3) {
                 blinking = false;
                 blink_timer = 0;
                 next_blink = 40 + (rand() % 100);
             }
         }
-        
-        static int pupil_dx = 0;
-        static int pupil_dy = 0;
-        static int pupil_target_dx = 0;
-        static int pupil_target_dy = 0;
-        
+
+        /* ---- Gaze / pupil wander ---- */
         if (rand() % 20 == 0) {
-            pupil_target_dx = (rand() % 20) - 10;
-            pupil_target_dy = (rand() % 10) - 5;
+            pupil_target_dx = (rand() % 14) - 7;   // ±7 horizontal
+            pupil_target_dy = (rand() % 8) - 4;    // ±4 vertical
         }
-        
-        // Smoothly move pupil
         if (pupil_dx < pupil_target_dx) pupil_dx++;
         if (pupil_dx > pupil_target_dx) pupil_dx--;
         if (pupil_dy < pupil_target_dy) pupil_dy++;
         if (pupil_dy > pupil_target_dy) pupil_dy--;
 
-        for(int y = 0; y < 80; y++) {
-            for(int x = 0; x < 160; x++) {
-                uint16_t color = 0x0000;
-                int dx = x - cx;
-                int dy = y - cy;
-                
-                // Ellipse for a single large eye
-                if ((dx * dx * max_ry * max_ry) + (dy * dy * max_rx * max_rx) <= (max_rx * max_rx * max_ry * max_ry)) {
+        /* ---- Pupil breathing / dilation (subtle ±1 px oscillation) ---- */
+        int pupil_r = base_pupil_r + ((frame_count / 12) % 3) - 1; // 6,7,8 cycle
+        int pupil_r_sq = pupil_r * pupil_r;
+
+        /* ---- Pre-compute frame-invariant constants (avoid re-calc per pixel) ---- */
+        int rx_sq = eye_rx * eye_rx;           // 34*34 = 1156
+        int ry_sq = max_ry * max_ry;           // max 32*32 = 1024
+        int ellipse_limit = rx_sq * ry_sq;     // max ~1,183,744 (fits int32 easily)
+        int iris_r_sq = iris_r * iris_r;       // 18*18 = 324
+        uint16_t warm_edge = rgb565(240, 230, 220);
+        uint16_t faint_catchlight = rgb565(200, 220, 255);
+
+        /* ---- Render both eyes ---- */
+        for (int y = 0; y < 80; y++) {
+            int dy = y - eye_cy;
+            int dy_sq_rx = dy * dy * rx_sq;  // pre-compute for this row
+
+            for (int x = 0; x < 160; x++) {
+                uint16_t color = 0x0000; // background black
+
+                // Spatial early-reject: skip the gap between eyes (x 75-85)
+                // and only check the relevant eye based on which half of the screen
+                int ei_start, ei_end;
+                if (x < 6) { ei_start = 2; ei_end = 2; }       // too far left for either
+                else if (x < 75) { ei_start = 0; ei_end = 1; } // only left eye possible
+                else if (x < 86) { ei_start = 2; ei_end = 2; } // gap between eyes
+                else if (x < 155) { ei_start = 1; ei_end = 2; }// only right eye possible
+                else { ei_start = 2; ei_end = 2; }             // too far right
+
+                for (int ei = ei_start; ei < ei_end; ei++) {
+                    int dx = x - eye_cx[ei];
+
+                    // Ellipse test (all int32 – max value ~2.4M, well within 2^31)
+                    int ex_val = dx * dx * ry_sq + dy_sq_rx;
+                    if (ex_val > ellipse_limit)
+                        continue; // outside this eye
+
+                    /* ---- Eyelid (mood) ---- */
+                    int inner_dx = (ei == 0) ? dx : -dx;
+
                     int eye_lid_y = -1000;
-                    
-                    if (eye_mood == 0) { // Angry (slants down towards center)
-                        eye_lid_y = cy - 10 - abs(dx) * 2 / 5;
-                    } else if (eye_mood == 1) { // Neutral (flat eyelid)
-                        eye_lid_y = cy - 15;
-                    } else if (eye_mood == 2) { // Sad (slants up towards center)
-                        eye_lid_y = cy - 25 + abs(dx) * 2 / 5;
+                    if (eye_mood == 0) {
+                        eye_lid_y = eye_cy - 8 - (inner_dx * 3 / 7);
+                    } else if (eye_mood == 1) {
+                        eye_lid_y = eye_cy - 14;
+                    } else if (eye_mood == 2) {
+                        eye_lid_y = eye_cy - 22 + (inner_dx * 3 / 7);
                     }
-                    
-                    if (y > eye_lid_y || blinking) {
-                        color = 0xFFFF; // Sclera (White)
-                        
-                        // Iris
-                        int idx = dx - pupil_dx;
-                        int idy = dy - pupil_dy;
-                        int iris_r = 22;
-                        
-                        if (idx*idx + idy*idy <= iris_r*iris_r) {
-                            color = 0x7E59; // Light greenish blue
-                            
-                            // Pupil
-                            int pupil_r = 8;
-                            if (idx*idx + idy*idy <= pupil_r*pupil_r) {
-                                color = 0x0000; // Black
-                            } else {
-                                // Catchlight (reflection)
-                                int hx = idx + 7;
-                                int hy = idy + 7;
-                                if (hx*hx + hy*hy <= 12) {
-                                    color = 0xFFFF; // White
-                                }
+
+                    if (y <= eye_lid_y && !blinking)
+                        continue;
+
+                    /* ---- Sclera ---- */
+                    int dist_sq = dx * dx + dy * dy;
+                    color = (dist_sq > rx_sq * 3 / 4) ? warm_edge : 0xFFFF;
+
+                    /* ---- Iris ---- */
+                    int idx = dx - pupil_dx;
+                    int idy = dy - pupil_dy;
+                    int id_sq = idx * idx + idy * idy;
+
+                    if (id_sq <= iris_r_sq) {
+                        int frac = id_sq * 256 / iris_r_sq;
+
+                        uint8_t r, g, b;
+                        if (frac > 200) {
+                            r = 10; g = 50; b = 60;
+                        } else if (frac > 120) {
+                            r = 20; g = 120; b = 110;
+                        } else if (frac > 50) {
+                            r = 40; g = 180; b = 160;
+                        } else {
+                            r = 80; g = 220; b = 200;
+                        }
+
+                        uint32_t rr = fast_rand();
+                        if ((rr & 0xF) == 0) {
+                            r = 200; g = 160; b = 40;
+                        }
+                        if ((rr & 0x1F) == 1) {
+                            r = 5; g = 40; b = 35;
+                        }
+
+                        color = rgb565(r, g, b);
+
+                        /* ---- Pupil ---- */
+                        if (id_sq <= pupil_r_sq) {
+                            color = 0x0000;
+                        } else {
+                            /* ---- Catchlight ---- */
+                            int cl_ox = (ei == 0) ? 6 : -6;
+                            int hx = idx - cl_ox;
+                            int hy = idy + 6;
+                            if (hx * hx + hy * hy <= 9) {
+                                color = 0xFFFF;
+                            }
+                            int hx2 = idx + ((ei == 0) ? -3 : 3);
+                            int hy2 = idy + 4;
+                            if (hx2 * hx2 + hy2 * hy2 <= 4) {
+                                color = faint_catchlight;
                             }
                         }
                     }
+
+                    break; // pixel claimed by this eye
                 }
-                buffer[y*160 + x] = color;
+                buffer[y * 160 + x] = color;
+            }
+
+            // Yield every 16 rows so httpd/audio tasks can run
+            // vTaskDelay(1) truly sleeps (unlike taskYIELD which only yields to same/higher prio)
+            if ((y & 0xF) == 0xF) {
+                vTaskDelay(1);
             }
         }
-        
+
         esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, 160, 80, buffer);
-        vTaskDelay(pdMS_TO_TICKS(50));
+        vTaskDelay(pdMS_TO_TICKS(60));
     }
 }
 
@@ -177,7 +267,7 @@ static void init_display(void) {
 
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
 
-    xTaskCreate(dog_eyes_task, "dog_eyes", 4096, NULL, 5, NULL);
+    xTaskCreate(dog_eyes_task, "dog_eyes", 5120, NULL, 2, NULL);
 }
 
 // --- Audio PDM & Amp ---
@@ -251,6 +341,36 @@ void dog_audio_play_chunk(const uint8_t *data, size_t size) {
     }
 }
 
+// --- Async audio feeder (frees httpd thread immediately) ---
+typedef struct {
+    uint8_t *data;
+    size_t size;
+} audio_payload_t;
+
+static QueueHandle_t audio_payload_queue = NULL;
+
+static void dog_audio_feeder_task(void *arg) {
+    audio_payload_t payload;
+    while (1) {
+        if (xQueueReceive(audio_payload_queue, &payload, portMAX_DELAY) == pdTRUE) {
+            dog_audio_play_chunk(payload.data, payload.size);
+            free(payload.data);
+        }
+    }
+}
+
+void dog_audio_play_async(uint8_t *data, size_t size) {
+    if (!audio_payload_queue || !data || size == 0) {
+        free(data);
+        return;
+    }
+    audio_payload_t payload = { .data = data, .size = size };
+    if (xQueueSend(audio_payload_queue, &payload, pdMS_TO_TICKS(500)) != pdTRUE) {
+        ESP_LOGW(TAG, "Audio queue full, dropping payload");
+        free(data);
+    }
+}
+
 void dog_audio_play_tone(void) {
     if (!audio_rb) return;
     ESP_LOGI(TAG, "Playing 440Hz test tone...");
@@ -302,10 +422,11 @@ static void init_audio(void) {
     ESP_ERROR_CHECK(i2s_channel_init_pdm_tx_mode(tx_chan, &pdm_cfg));
     ESP_ERROR_CHECK(i2s_channel_enable(tx_chan));
 
-    // Create ring buffer for 8KB of audio chunks
-    audio_rb = xRingbufferCreate(8192, RINGBUF_TYPE_BYTEBUF);
+    audio_rb = xRingbufferCreate(16384, RINGBUF_TYPE_BYTEBUF);
+    audio_payload_queue = xQueueCreate(16, sizeof(audio_payload_t));
 
     xTaskCreate(dog_audio_task, "dog_audio", 4096, NULL, 5, NULL);
+    xTaskCreate(dog_audio_feeder_task, "audio_feed", 3072, NULL, 4, NULL);
 }
 
 // --- Microphone ADC ---

@@ -315,18 +315,49 @@ static esp_err_t schedule_handler(httpd_req_t *req) {
 #ifdef WS2812_NUM_LEDS
 static esp_err_t audio_post_handler(httpd_req_t *req) {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    char buf[1024];
+
     int remaining = req->content_len;
-    while (remaining > 0) {
-        int to_read = remaining < sizeof(buf) ? remaining : sizeof(buf);
-        int received = httpd_req_recv(req, buf, to_read);
-        if (received <= 0) {
-            if (received == HTTPD_SOCK_ERR_TIMEOUT) continue;
-            return ESP_FAIL;
-        }
-        dog_audio_play_chunk((const uint8_t *)buf, received);
-        remaining -= received;
+    if (remaining <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data");
+        return ESP_FAIL;
     }
+
+    // Stream the body in small chunks through the async queue.
+    // Each chunk is a small malloc (≤4KB) — no large allocation needed.
+    while (remaining > 0) {
+        int chunk_sz = remaining < 4096 ? remaining : 4096;
+        uint8_t *chunk = malloc(chunk_sz);
+        if (!chunk) {
+            ESP_LOGE("WEB", "No heap for %d-byte audio chunk", chunk_sz);
+            // Drain the rest of the HTTP body so the connection stays clean
+            char drain[512];
+            while (remaining > 0) {
+                int n = httpd_req_recv(req, drain, remaining < (int)sizeof(drain) ? remaining : (int)sizeof(drain));
+                if (n <= 0) break;
+                remaining -= n;
+            }
+            break;
+        }
+
+        // Read exactly chunk_sz bytes from the HTTP stream
+        int offset = 0;
+        while (offset < chunk_sz) {
+            int received = httpd_req_recv(req, (char *)chunk + offset, chunk_sz - offset);
+            if (received <= 0) {
+                if (received == HTTPD_SOCK_ERR_TIMEOUT) continue;
+                free(chunk);
+                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Recv fail");
+                return ESP_FAIL;
+            }
+            offset += received;
+        }
+
+        // Enqueue chunk — feeder task takes ownership and frees after playback.
+        // Blocks up to 500ms if queue is full (feeder is draining).
+        dog_audio_play_async(chunk, chunk_sz);
+        remaining -= chunk_sz;
+    }
+
     httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
