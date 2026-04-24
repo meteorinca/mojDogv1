@@ -35,5 +35,10 @@ message(STATUS "━━━ Board: ${BOARD}  (${BOARD_CONFIG_DIR}/board_config.h) 
 #  e.g. sdkconfig.defaults.esp32c3 is loaded automatically by IDF when
 #  IDF_TARGET matches. No extra CMake needed — IDF handles it natively.
 
+if(DEFINED DEVICE_NUMBER)
+    add_compile_definitions(DEVICE_NUMBER=${DEVICE_NUMBER})
+    message(STATUS "━━━ Device Number: ${DEVICE_NUMBER} ━━━")
+endif()
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(mojDogv1)

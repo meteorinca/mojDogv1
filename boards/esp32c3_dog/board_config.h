@@ -8,8 +8,18 @@
 
 // ── Firmware identity ───────────────────────────────────────────────────────
 #define FW_VERSION          "0.0.1"
-#define MDNS_HOSTNAME       "dogbot"
-#define MDNS_INSTANCE       "MOJDogv1"
+
+// Device number macro helpers to stringify the number passed from CMake
+#define _XSTR(x) #x
+#define _STR(x) _XSTR(x)
+
+#ifndef DEVICE_NUMBER
+#define DEVICE_NUMBER 2
+#endif
+
+#define MDNS_HOSTNAME       "dogbot" _STR(DEVICE_NUMBER)
+#define MDNS_INSTANCE       "MOJDogv" _STR(DEVICE_NUMBER)
+
 #define WEB_SERVER_PORT     81
 #define DISABLE_OTA         1
 

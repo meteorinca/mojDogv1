@@ -34,3 +34,6 @@ Thumbs.db
 # Secrets
 secrets.h
 main/secrets.h
+
+# Jupyter
+.ipynb_checkpoints
