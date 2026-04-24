@@ -1,0 +1,10 @@
+# sdkconfig.defaults — applied to ALL boards/chips
+# (chip-specific overrides go in sdkconfig.defaults.<chip>, e.g. sdkconfig.defaults.esp32c3)
+
+# Use custom OTA partition table
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+
+# Increase HTTP server stack for OTA uploads
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024

@@ -1,0 +1,7 @@
+# Name,   Type, SubType, Offset,   Size,     Flags
+# Partition table for 2MB flash (ESP32-C3 dog robot)
+# No OTA (not enough room for two app slots) — single app + NVS + storage
+nvs,      data, nvs,     0x9000,   0x6000,
+phy_init, data, phy,     0xf000,   0x1000,
+factory,  app,  factory, 0x10000,  0x1E0000,
+storage,  data, spiffs,  0x1F0000, 0x10000,

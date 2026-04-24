@@ -1,0 +1,16 @@
+# sdkconfig.defaults.esp32c3
+# Applied automatically by IDF when IDF_TARGET=esp32c3
+
+# C3 uses UART0 for console (no native USB)
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_NUM=0
+
+# C3 dog board has 2MB flash — override the default 8MB S3 settings
+CONFIG_ESPTOOLPY_FLASHSIZE_2MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="2MB"
+
+# Use the 2MB partition table (no OTA — not enough room for two app slots)
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_2mb.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions_2mb.csv"
+
+# C3 has no touch sensor
