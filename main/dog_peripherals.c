@@ -439,7 +439,7 @@ void dog_audio_play_async(uint8_t *data, size_t size) {
         return;
     }
     audio_payload_t payload = { .data = data, .size = size };
-    if (xQueueSend(audio_payload_queue, &payload, pdMS_TO_TICKS(500)) != pdTRUE) {
+    if (xQueueSend(audio_payload_queue, &payload, portMAX_DELAY) != pdTRUE) {
         ESP_LOGW(TAG, "Audio queue full, dropping payload");
         free(data);
     }
