@@ -161,7 +161,7 @@ static void dog_eyes_task(void *arg) {
             for (int i = 0; i < msg_len; i++) {
                 char c = oled_text_msg[i];
                 if (c < 32 || c > 126) c = 32;
-                const uint8_t *glyph = &font5x7[(c - 32) * 5];
+                const uint8_t *glyph = &font5x7[(c - 32) * 8];
                 int cx = start_x + i * (fw + char_space);
                 for (int gx = 0; gx < 5; gx++) {
                     uint8_t col = glyph[gx];
@@ -172,7 +172,7 @@ static void dog_eyes_task(void *arg) {
                                     int px = cx + gx * scale + dx;
                                     int py = start_y + gy * scale + dy;
                                     if (px >= 0 && px < 160 && py >= 0 && py < 80) {
-                                        buffer[py * 160 + px] = 0x07E0; // Green text
+                                        buffer[py * 160 + px] = 0xFFFF; // White text
                                     }
                                 }
                             }

@@ -120,14 +120,8 @@ void execute_named_action(const char *action) {
         servo_action_set(1, POS1_NEUTRAL); servo_action_set(2, POS2_NEUTRAL);
         servo_action_set(3, POS3_NEUTRAL); servo_action_set(4, POS4_NEUTRAL);
     }
-    else if (strcmp(action, "walk_fwd") == 0) {
-        servo_quick_action(1, 60, POS1_NEUTRAL);
-        servo_quick_action(4, 120, POS4_NEUTRAL);
-    }
-    else if (strcmp(action, "walk_bwd") == 0) {
-        servo_quick_action(2, 120, POS2_NEUTRAL);
-        servo_quick_action(3, 60, POS3_NEUTRAL);
-    }
+    else if (strcmp(action, "walk_fwd") == 0) dog_action_send("forward");
+    else if (strcmp(action, "walk_bwd") == 0) dog_action_send("backward");
     // tts:<text> — push text to SSE clients for browser-side synthesis
     else if (strncmp(action, "tts:", 4) == 0) sse_broadcast_tts(action + 4);
     else ESP_LOGW("ACTION", "Unknown action: %s", action);
@@ -357,7 +351,7 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
         "fetch('https://api.codetabs.com/v1/proxy?quest='+encodeURIComponent('https://translate.google.com/translate_tts?ie=UTF-8&q='+encodeURIComponent(t)+'&tl=en&client=tw-ob'))"
         ".then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.arrayBuffer(); })"
         ".then(function(ab){"
-        "var ctx=new(window.AudioContext||window.webkitAudioContext)();"
+        "var ctx=window._sharedCtx||(window._sharedCtx=new(window.AudioContext||window.webkitAudioContext)());"
         "return ctx.decodeAudioData(ab).then(function(dec){"
         "var samples=Math.ceil(dec.duration*16000);"
         "if(samples<1)throw new Error('empty');"
@@ -791,46 +785,23 @@ static esp_err_t schedule_handler(httpd_req_t *req) {
 static esp_err_t audio_post_handler(httpd_req_t *req) {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
 
+    char buf[1024];
     int remaining = req->content_len;
     if (remaining <= 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data");
         return ESP_FAIL;
     }
 
-    // Stream the body in small chunks through the async queue.
-    // Each chunk is a small malloc (≤4KB) — no large allocation needed.
     while (remaining > 0) {
-        int chunk_sz = remaining < 4096 ? remaining : 4096;
-        uint8_t *chunk = malloc(chunk_sz);
-        if (!chunk) {
-            ESP_LOGE("WEB", "No heap for %d-byte audio chunk", chunk_sz);
-            // Drain the rest of the HTTP body so the connection stays clean
-            char drain[512];
-            while (remaining > 0) {
-                int n = httpd_req_recv(req, drain, remaining < (int)sizeof(drain) ? remaining : (int)sizeof(drain));
-                if (n <= 0) break;
-                remaining -= n;
-            }
-            break;
+        int to_read = remaining < sizeof(buf) ? remaining : sizeof(buf);
+        int received = httpd_req_recv(req, buf, to_read);
+        if (received <= 0) {
+            if (received == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            ESP_LOGE("WEB", "Audio recv fail");
+            return ESP_FAIL;
         }
-
-        // Read exactly chunk_sz bytes from the HTTP stream
-        int offset = 0;
-        while (offset < chunk_sz) {
-            int received = httpd_req_recv(req, (char *)chunk + offset, chunk_sz - offset);
-            if (received <= 0) {
-                if (received == HTTPD_SOCK_ERR_TIMEOUT) continue;
-                free(chunk);
-                httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Recv fail");
-                return ESP_FAIL;
-            }
-            offset += received;
-        }
-
-        // Enqueue chunk — feeder task takes ownership and frees after playback.
-        // Blocks up to 500ms if queue is full (feeder is draining).
-        dog_audio_play_async(chunk, chunk_sz);
-        remaining -= chunk_sz;
+        dog_audio_play_chunk((const uint8_t *)buf, received);
+        remaining -= received;
     }
 
     httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
