@@ -1,5 +1,8 @@
 #include "dog_peripherals.h"
 #include "config.h"
+#include "audio_clips.h"
+#include "paulbot_audio.h"
+#include "font5x7.h"
 
 #ifdef WS2812_NUM_LEDS
 
@@ -21,8 +24,20 @@
 static const char *TAG = "DOG_PERIPH";
 
 static volatile bool force_blink = false;
-static volatile int eye_mood = 0; // 0=angry, 1=neutral, 2=sad
+static volatile int eye_mood = 0; // 0=happy (full), 1=angry, 2=neutral, 3=sad
 static QueueHandle_t button_evt_queue = NULL;
+
+static char oled_text_msg[32] = {0};
+static volatile int oled_text_timer = 0;
+
+void dog_set_eye_mood(int mood) {
+    if (mood >= 0 && mood <= 3) eye_mood = mood;
+}
+
+void dog_set_oled_text(const char* msg, int duration_ms) {
+    strncpy(oled_text_msg, msg, sizeof(oled_text_msg) - 1);
+    oled_text_timer = duration_ms / 60; // ~60ms per frame
+}
 
 // --- OLED SPI Display ---
 static esp_lcd_panel_handle_t panel_handle = NULL;
@@ -59,6 +74,10 @@ static void dog_eyes_task(void *arg) {
     static int pupil_target_dx = 0;
     static int pupil_target_dy = 0;
 
+    // Shared color wander for both eyes (hue phase)
+    static int color_phase = 0;
+    static int target_phase = 0;
+
     /* ---- Eye geometry (two eyes side-by-side on 160x80) ---- */
     // Left eye center, Right eye center
     const int eye_cx[2] = { 40, 120 };
@@ -86,7 +105,7 @@ static void dog_eyes_task(void *arg) {
         int max_ry = base_ry;
         if (blinking) {
             max_ry = 3;
-            if (blink_timer > 3) {
+            if (blink_timer > 1) {
                 blinking = false;
                 blink_timer = 0;
                 next_blink = 40 + (rand() % 100);
@@ -103,6 +122,18 @@ static void dog_eyes_task(void *arg) {
         if (pupil_dy < pupil_target_dy) pupil_dy++;
         if (pupil_dy > pupil_target_dy) pupil_dy--;
 
+        /* ---- Color wander (hue shift multiplier) ---- */
+        if (rand() % 150 == 0) {
+            target_phase = (rand() % 101) - 50; // -50 to +50
+        }
+        // Change by 1 unit only every 4th frame for ultra-subtle speed
+        if (frame_count % 4 == 0) {
+            if (color_phase < target_phase) color_phase++;
+            if (color_phase > target_phase) color_phase--;
+        }
+        int g_mult = 256 - color_phase; // shift green down/up
+        int b_mult = 256 + color_phase; // shift blue up/down
+
         /* ---- Pupil breathing / dilation (subtle ±1 px oscillation) ---- */
         int pupil_r = base_pupil_r + ((frame_count / 12) % 3) - 1; // 6,7,8 cycle
         int pupil_r_sq = pupil_r * pupil_r;
@@ -116,12 +147,47 @@ static void dog_eyes_task(void *arg) {
         uint16_t faint_catchlight = rgb565(200, 220, 255);
 
         /* ---- Render both eyes ---- */
-        for (int y = 0; y < 80; y++) {
-            int dy = y - eye_cy;
-            int dy_sq_rx = dy * dy * rx_sq;  // pre-compute for this row
-
-            for (int x = 0; x < 160; x++) {
-                uint16_t color = 0x0000; // background black
+        if (oled_text_timer > 0) {
+            oled_text_timer--;
+            memset(buffer, 0, 160 * 80 * sizeof(uint16_t));
+            int msg_len = strlen(oled_text_msg);
+            int scale = 3;
+            int fw = 5 * scale;
+            int fh = 7 * scale;
+            int char_space = 1 * scale;
+            int total_w = msg_len * (fw + char_space) - char_space;
+            int start_x = (160 - total_w) / 2;
+            int start_y = (80 - fh) / 2;
+            for (int i = 0; i < msg_len; i++) {
+                char c = oled_text_msg[i];
+                if (c < 32 || c > 126) c = 32;
+                const uint8_t *glyph = &font5x7[(c - 32) * 5];
+                int cx = start_x + i * (fw + char_space);
+                for (int gx = 0; gx < 5; gx++) {
+                    uint8_t col = glyph[gx];
+                    for (int gy = 0; gy < 7; gy++) {
+                        if (col & (1 << gy)) {
+                            for (int dx = 0; dx < scale; dx++) {
+                                for (int dy = 0; dy < scale; dy++) {
+                                    int px = cx + gx * scale + dx;
+                                    int py = start_y + gy * scale + dy;
+                                    if (px >= 0 && px < 160 && py >= 0 && py < 80) {
+                                        buffer[py * 160 + px] = 0x07E0; // Green text
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            vTaskDelay(1);
+        } else {
+            for (int y = 0; y < 80; y++) {
+                int dy = y - eye_cy;
+                int dy_sq_rx = dy * dy * rx_sq;  // pre-compute for this row
+    
+                for (int x = 0; x < 160; x++) {
+                    uint16_t color = 0x0000; // background black
 
                 // Spatial early-reject: skip the gap between eyes (x 75-85)
                 // and only check the relevant eye based on which half of the screen
@@ -145,11 +211,13 @@ static void dog_eyes_task(void *arg) {
 
                     int eye_lid_y = -1000;
                     if (eye_mood == 0) {
-                        eye_lid_y = eye_cy - 8 - (inner_dx * 3 / 7);
+                        eye_lid_y = -1000; // full happy
                     } else if (eye_mood == 1) {
-                        eye_lid_y = eye_cy - 14;
+                        eye_lid_y = eye_cy - 8 - (inner_dx * 3 / 7); // angry
                     } else if (eye_mood == 2) {
-                        eye_lid_y = eye_cy - 22 + (inner_dx * 3 / 7);
+                        eye_lid_y = eye_cy - 14; // neutral
+                    } else if (eye_mood == 3) {
+                        eye_lid_y = eye_cy - 22 + (inner_dx * 3 / 7); // sad
                     }
 
                     if (y <= eye_lid_y && !blinking)
@@ -186,6 +254,12 @@ static void dog_eyes_task(void *arg) {
                             r = 5; g = 40; b = 35;
                         }
 
+                        // Apply subtle color wander (hue scaling avoids gradient pixelation)
+                        int ig = (g * g_mult) >> 8;
+                        int ib = (b * b_mult) >> 8;
+                        g = (ig > 255) ? 255 : ig;
+                        b = (ib > 255) ? 255 : ib;
+
                         color = rgb565(r, g, b);
 
                         /* ---- Pupil ---- */
@@ -213,10 +287,10 @@ static void dog_eyes_task(void *arg) {
             }
 
             // Yield every 16 rows so httpd/audio tasks can run
-            // vTaskDelay(1) truly sleeps (unlike taskYIELD which only yields to same/higher prio)
             if ((y & 0xF) == 0xF) {
                 vTaskDelay(1);
             }
+        }
         }
 
         esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, 160, 80, buffer);
@@ -267,7 +341,7 @@ static void init_display(void) {
 
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
 
-    xTaskCreate(dog_eyes_task, "dog_eyes", 5120, NULL, 2, NULL);
+    xTaskCreate(dog_eyes_task, "dog_eyes", 5120, NULL, 1, NULL); // prio 1: yields to httpd & audio
 }
 
 // --- Audio PDM & Amp ---
@@ -373,26 +447,30 @@ void dog_audio_play_async(uint8_t *data, size_t size) {
 
 void dog_audio_play_tone(void) {
     if (!audio_rb) return;
-    ESP_LOGI(TAG, "Playing 440Hz test tone...");
-    int sample_rate = 16000;
-    int duration_sec = 1;
-    int samples = sample_rate * duration_sec;
-    uint8_t *tone_buf = malloc(1024);
+    ESP_LOGI(TAG, "Playing bark clip...");
+    size_t samples = sizeof(clip_bark) / sizeof(clip_bark[0]);
+    uint8_t *tone_buf = malloc(2048);
     if (!tone_buf) return;
     
-    for (int i = 0; i < samples; i++) {
-        // 440 Hz sine wave, max amplitude
-        int16_t val = (int16_t)(sin(i * 440.0 * 2.0 * M_PI / sample_rate) * 32000.0);
-        int buf_idx = (i % 512) * 2;
+    for (size_t i = 0; i < samples; i++) {
+        int16_t val = clip_bark[i];
+        int buf_idx = (i % 1024) * 2;
         tone_buf[buf_idx] = val & 0xFF;           // Low byte
         tone_buf[buf_idx + 1] = (val >> 8) & 0xFF; // High byte
         
-        if (buf_idx == 1022 || i == samples - 1) {
+        if (buf_idx == 2046 || i == samples - 1) {
             dog_audio_play_chunk(tone_buf, buf_idx + 2);
         }
     }
     free(tone_buf);
-    ESP_LOGI(TAG, "Test tone finished");
+    ESP_LOGI(TAG, "Bark clip finished");
+}
+
+void dog_audio_play_paulbot(void) {
+    if (!audio_rb) return;
+    ESP_LOGI(TAG, "Playing paulbot boot sound...");
+    dog_audio_play_chunk(paulbot_audio, paulbot_audio_len);
+    ESP_LOGI(TAG, "Paulbot boot sound finished");
 }
 
 
@@ -482,7 +560,7 @@ static void button_task(void* arg) {
             if(gpio_get_level(io_num) == 0) {
                 ESP_LOGI(TAG, "Button %lu pressed", io_num);
                 if (io_num == BTN_BOOT_GPIO) {
-                    eye_mood = (eye_mood + 1) % 3;
+                    eye_mood = (eye_mood + 1) % 4;
                     dog_audio_play_tone(); // audio feedback
                 } else {
                     force_blink = true;

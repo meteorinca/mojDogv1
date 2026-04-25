@@ -13,8 +13,9 @@ static bool s_synced = false;
 
 // ── Scheduled actions ──
 typedef struct {
-    time_t execute_at;
-    char   action[16];
+    time_t execute_at;       // second-resolution trigger
+    int32_t execute_at_ms;   // additional milliseconds offset (0-999)
+    char   action[32];       // e.g. "hi", "wiggle", "s1_90", "tts:hello"
     bool   active;
 } sched_entry_t;
 
@@ -64,11 +65,18 @@ void timekeep_format(char *buf, size_t len) {
     strftime(buf, len, "%Y-%m-%d %H:%M:%S", &ti);
 }
 
+void timekeep_set_time(time_t epoch) {
+    struct timeval tv = { .tv_sec = epoch, .tv_usec = 0 };
+    settimeofday(&tv, NULL);
+    s_synced = true;
+}
+
 void timekeep_schedule(const char *action, time_t execute_at) {
     xSemaphoreTake(s_sched_mutex, portMAX_DELAY);
     for (int i = 0; i < MAX_SCHEDULED_ACTIONS; i++) {
         if (!s_schedule[i].active) {
-            s_schedule[i].execute_at = execute_at;
+            s_schedule[i].execute_at    = execute_at;
+            s_schedule[i].execute_at_ms = 0;
             strncpy(s_schedule[i].action, action, sizeof(s_schedule[i].action) - 1);
             s_schedule[i].action[sizeof(s_schedule[i].action) - 1] = '\0';
             s_schedule[i].active = true;
@@ -79,25 +87,52 @@ void timekeep_schedule(const char *action, time_t execute_at) {
     xSemaphoreGive(s_sched_mutex);
 }
 
-static void scheduler_task(void *pvParameters) {
-    while (1) {
-        if (s_synced) {
-            time_t now = timekeep_now();
-            xSemaphoreTake(s_sched_mutex, portMAX_DELAY);
-            for (int i = 0; i < MAX_SCHEDULED_ACTIONS; i++) {
-                if (s_schedule[i].active && now >= s_schedule[i].execute_at) {
-                    ESP_LOGI("SCHED", "Executing '%s'", s_schedule[i].action);
-                    s_schedule[i].active = false;
-                    // Release mutex before executing (action may take time)
-                    xSemaphoreGive(s_sched_mutex);
-                    execute_named_action(s_schedule[i].action);
-                    // Re-take for next iteration
-                    xSemaphoreTake(s_sched_mutex, portMAX_DELAY);
-                }
-            }
-            xSemaphoreGive(s_sched_mutex);
+// Schedule with millisecond precision: execute_at_ms adds 0-999ms after execute_at
+void timekeep_schedule_ms(const char *action, time_t execute_at, int32_t extra_ms) {
+    xSemaphoreTake(s_sched_mutex, portMAX_DELAY);
+    for (int i = 0; i < MAX_SCHEDULED_ACTIONS; i++) {
+        if (!s_schedule[i].active) {
+            s_schedule[i].execute_at    = execute_at + extra_ms / 1000;
+            s_schedule[i].execute_at_ms = extra_ms % 1000;
+            strncpy(s_schedule[i].action, action, sizeof(s_schedule[i].action) - 1);
+            s_schedule[i].action[sizeof(s_schedule[i].action) - 1] = '\0';
+            s_schedule[i].active = true;
+            ESP_LOGI("SCHED", "Scheduled '%s' at %ld+%ldms",
+                     action, (long)execute_at, (long)extra_ms);
+            break;
         }
-        vTaskDelay(pdMS_TO_TICKS(1000));   // 1 s is fine for second-resolution scheduling
+    }
+    xSemaphoreGive(s_sched_mutex);
+}
+
+static void scheduler_task(void *pvParameters) {
+    // 100ms tick — gives ~100ms precision for fleet-synchronized moves.
+    // Actual servo dispatch is still non-blocking (queued to dog_task).
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        // if (!s_synced) continue; // removed to allow relative scheduling without internet
+
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        time_t  now_s  = tv.tv_sec;
+        int32_t now_ms = tv.tv_usec / 1000;
+
+        xSemaphoreTake(s_sched_mutex, portMAX_DELAY);
+        for (int i = 0; i < MAX_SCHEDULED_ACTIONS; i++) {
+            if (!s_schedule[i].active) continue;
+            // Fire when wall-clock has passed the target second+ms
+            bool due = (now_s > s_schedule[i].execute_at) ||
+                       (now_s == s_schedule[i].execute_at &&
+                        now_ms >= s_schedule[i].execute_at_ms);
+            if (due) {
+                ESP_LOGI("SCHED", "Firing '%s'", s_schedule[i].action);
+                s_schedule[i].active = false;
+                xSemaphoreGive(s_sched_mutex);
+                execute_named_action(s_schedule[i].action);
+                xSemaphoreTake(s_sched_mutex, portMAX_DELAY);
+            }
+        }
+        xSemaphoreGive(s_sched_mutex);
     }
 }
 

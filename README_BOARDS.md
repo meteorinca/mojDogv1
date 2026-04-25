@@ -7,11 +7,7 @@ No branches, no duplicated files — just one command to switch.
 
 ## How to build for each board
 
-### ESP32-S3 Bedroom Controller
 
-```powershell
-idf.py -DBOARD=esp32s3_bedroom set-target esp32s3 fullclean build flash monitor
-```
 
 ### ESP32-C3 Dog Robot (4 leg servos)
 
@@ -34,8 +30,6 @@ project/
 ├── sdkconfig.defaults.esp32c3  ← C3-specific SDK settings (auto-loaded by IDF)
 │
 ├── boards/
-│   ├── esp32s3_bedroom/
-│   │   └── board_config.h  ← ALL pin defs, feature flags for this board
 │   └── esp32c3_dog/
 │       └── board_config.h  ← ALL pin defs, feature flags for this board
 │

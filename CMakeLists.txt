@@ -3,17 +3,13 @@ cmake_minimum_required(VERSION 3.16)
 # ── Board selection ───────────────────────────────────────────────────────────
 #
 #  Usage:
-#    idf.py -DBOARD=esp32c3_dog     set-target esp32c3 build
-#    idf.py -DBOARD=esp32s3_bedroom set-target esp32s3 build
+#    idf.py set-target esp32c3 build
 #
 #  The BOARD variable is cached so subsequent `idf.py build` calls remember it.
 #  To switch boards: idf.py -DBOARD=<new_board> set-target <chip> fullclean build
 
 if(NOT DEFINED BOARD)
-    message(FATAL_ERROR
-        "\n\n  No BOARD specified!\n"
-        "  Run:  idf.py -DBOARD=esp32c3_dog     set-target esp32c3  build\n"
-        "   or:  idf.py -DBOARD=esp32s3_bedroom set-target esp32s3  build\n")
+    set(BOARD "esp32c3_dog")
 endif()
 
 set(BOARD ${BOARD} CACHE STRING "Active board name" FORCE)

@@ -1,0 +1,9 @@
+## IDF Component Manager Manifest File
+dependencies:
+  ## Required IDF version
+  idf:
+    version: '>=5.0'
+  espfriends/servo_dog_ctrl:
+    version: '*'
+    override_path: ../../../components/servo_dog_ctrl
+  espressif/mdns: '^1.8.2'

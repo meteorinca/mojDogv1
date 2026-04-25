@@ -1,0 +1,9 @@
+## IDF Component Manager Manifest File
+dependencies:
+  espressif/button: "^3.2.2"
+  ## Required IDF version
+  idf:
+    version: ">=5.0"
+  lijunru-hub/servo_dog_ctrl:
+    version: "*"
+    override_path: "../../../components/servo_dog_ctrl"

@@ -4,6 +4,7 @@
 set(COMMON_SRCS
     "main.c"
     "servo.c"
+    "dog_actions.c"
     "wifi_mgr.c"
     "timekeep.c"
     "webserver.c"
@@ -22,19 +23,9 @@ else()
     message(STATUS "  [main] LED driver: led.c (simple GPIO/LEDC)")
 endif()
 
-# Boards that support OTA
-set(NO_OTA_BOARDS "esp32c3_dog")
-
-if(NOT BOARD IN_LIST NO_OTA_BOARDS)
-    list(APPEND CONDITIONAL_SRCS "ota.c")
-    list(APPEND CONDITIONAL_REQ "app_update")
-    message(STATUS "  [main] OTA feature: ENABLED")
-else()
-    message(STATUS "  [main] OTA feature: DISABLED (board=${BOARD})")
-endif()
 
 # Boards that include a 433 MHz RF module
-set(HAS_RF_BOARDS "esp32s3_bedroom")
+set(HAS_RF_BOARDS "")
 
 if(BOARD IN_LIST HAS_RF_BOARDS)
     list(APPEND CONDITIONAL_SRCS "rf.c")
@@ -61,6 +52,7 @@ idf_component_register(
                     esp_adc
                     nvs_flash
                     esp_http_server
+                    esp_http_client
                     json
                     mdns
                     driver

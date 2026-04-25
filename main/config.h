@@ -5,8 +5,7 @@
 //  This file selects the correct board header based on the BOARD cmake cache
 //  variable, which is set at configure time:
 //
-//    idf.py -DBOARD=esp32c3_dog   set-target esp32c3 build
-//    idf.py -DBOARD=esp32s3_bedroom set-target esp32s3 build
+//    idf.py set-target esp32c3 build
 //
 //  See README_BOARDS.md for the full workflow.
 // ============================================================================
@@ -24,8 +23,7 @@
   #error "No BOARD selected. Run: idf.py -DBOARD=<name> set-target <chip> build"
   //
   // Available boards:
-  //   esp32s3_bedroom   → idf.py -DBOARD=esp32s3_bedroom set-target esp32s3 build
-  //   esp32c3_dog       → idf.py -DBOARD=esp32c3_dog     set-target esp32c3 build
+  //   esp32c3_dog       → idf.py set-target esp32c3 build
   //
 #endif
 

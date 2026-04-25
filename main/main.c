@@ -3,11 +3,11 @@
 #ifdef WS2812_NUM_LEDS
 #include "ws2812.h"
 #include "dog_peripherals.h"
-#include "paulbot_audio.h"
 #else
 #include "led.h"
 #endif
 #include "servo.h"
+#include "dog_actions.h"
 #include "wifi_mgr.h"
 #include "timekeep.h"
 #include "touch_input.h"
@@ -23,7 +23,7 @@
 static void startup_audio_task(void *arg) {
     EventGroupHandle_t wifi_events = (EventGroupHandle_t)arg;
     xEventGroupWaitBits(wifi_events, WIFI_CONNECTED_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
-    dog_audio_play_chunk(paulbot_audio, paulbot_audio_len);
+    dog_audio_play_paulbot();
     vTaskDelete(NULL);
 }
 #endif
@@ -50,6 +50,7 @@ void app_main(void) {
         servo_set_angle(i, servo_neutral(i));
     }
     servo_worker_start();
+    dog_actions_start();    // dog animation task (queues actions, non-blocking)
 
     // 433 MHz RF (only on boards that define RF_RX_GPIO)
 #ifdef RF_RX_GPIO
