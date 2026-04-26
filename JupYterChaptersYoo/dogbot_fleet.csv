@@ -1,7 +1,8 @@
 id,hostname,full_mdns,mac_address,ip_address,location,status,last_seen,firmware_version,notes
-1,dogbot1,dogbot1.local,,,Lab Bench A,unflashed,,0.2,
-2,dogbot2,dogbot2.local,,,Lab Bench A,unflashed,,0.2,
-3,dogbot3,dogbot3.local,,,Lab Bench A,unflashed,,0.2,
-4,dogbot4,dogbot4.local,,,Lab Bench B,unflashed,,0.2,
-5,dogbot5,dogbot5.local,,,Lab Bench B,unflashed,,0.2,
+0,dogbot0,dogbot0.local,,,Lab Bench A,flashed,,0.3,
+1,dogbot1,dogbot1.local,,,Lab Bench A,flashed,,0.3,
+2,dogbot2,dogbot2.local,,,Lab Bench A,flashed,,0.3,
+3,dogbot3,dogbot3.local,,,Lab Bench A,flashed,,0.3,
+4,dogbot4,dogbot4.local,,,Lab Bench B,flashed,,0.3,
+5,dogbot5,dogbot5.local,,,Lab Bench B,flashed,,0.3,
 6,dogbot6,dogbot6.local,,,Lab Bench B,flashed,,0.2,

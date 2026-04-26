@@ -9,6 +9,7 @@
 #include "mdns.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/timers.h"
+#include <string.h>
 
 #define TAG "WIFI"
 
@@ -18,6 +19,12 @@
 static EventGroupHandle_t s_wifi_events;
 static TimerHandle_t      s_ap_timer  = NULL;
 static bool               s_ap_active = false;
+
+// Multi-SSID tracking
+static int s_network_idx = 0;
+static const char* s_ssids[] = { WIFI_SSID_1, WIFI_SSID_2 };
+static const char* s_passes[] = { WIFI_PASS_1, WIFI_PASS_2 };
+#define NUM_NETWORKS (sizeof(s_ssids) / sizeof(s_ssids[0]))
 
 // ── SoftAP setup ─────────────────────────────────────────────────────────────
 // AP SSID: "MojDog-XX"  (XX = device number from board_config.h)
@@ -57,7 +64,28 @@ static void start_softap(void) {
 }
 
 static void ap_fallback_cb(TimerHandle_t xTimer) {
-    // start_softap(); // Removed to prevent bot from stealing user's internet
+    if (s_ap_active) return;
+
+    s_network_idx++;
+    if (s_network_idx < NUM_NETWORKS) {
+        ESP_LOGW(TAG, "STA timeout — trying next SSID: %s", s_ssids[s_network_idx]);
+        
+        wifi_config_t wifi_config = {
+            .sta = {
+                .threshold.authmode = WIFI_AUTH_WPA2_PSK,
+            },
+        };
+        strncpy((char*)wifi_config.sta.ssid, s_ssids[s_network_idx], sizeof(wifi_config.sta.ssid));
+        strncpy((char*)wifi_config.sta.password, s_passes[s_network_idx], sizeof(wifi_config.sta.password));
+        
+        esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+        esp_wifi_connect();
+        
+        // Reset timer for the next network
+        xTimerReset(s_ap_timer, 0);
+    } else {
+        start_softap();
+    }
 }
 
 // ── ESP-NETIF style event handler ──
@@ -71,10 +99,10 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
         }
     } else if (id == WIFI_EVENT_STA_DISCONNECTED) {
         if (!s_ap_active) {
-            ESP_LOGW(TAG, "Disconnected — reconnecting...");
+            ESP_LOGW(TAG, "Disconnected — retrying...");
             esp_wifi_connect();
-            // Reset the fallback timer on each disconnection attempt
-            if (s_ap_timer) xTimerReset(s_ap_timer, 0);
+            // Note: We DON'T reset the fallback timer here so that the 
+            // SSID switch/AP fallback happens after AP_FALLBACK_MS total.
         }
         xEventGroupClearBits(s_wifi_events, WIFI_CONNECTED_BIT);
     } else if (id == WIFI_EVENT_AP_STACONNECTED) {
@@ -117,11 +145,11 @@ EventGroupHandle_t wifi_init(void) {
 
     wifi_config_t wifi_config = {
         .sta = {
-            .ssid     = WIFI_SSID,
-            .password = WIFI_PASS,
             .threshold.authmode = WIFI_AUTH_WPA2_PSK,
         },
     };
+    strncpy((char*)wifi_config.sta.ssid, s_ssids[0], sizeof(wifi_config.sta.ssid));
+    strncpy((char*)wifi_config.sta.password, s_passes[0], sizeof(wifi_config.sta.password));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
