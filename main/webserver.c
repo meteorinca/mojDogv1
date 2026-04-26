@@ -112,16 +112,20 @@ void execute_named_action(const char *action) {
     else if (strcmp(action, "hi")     == 0) servo_quick_action(1, 40, POS1_NEUTRAL);
     else if (strcmp(action, "bark")   == 0) dog_audio_play_tone();
     else if (strcmp(action, "paulbot")== 0) dog_audio_play_paulbot();
-    else if (strcmp(action, "lay")    == 0) {
-        servo_action_set(1, 0); servo_action_set(2, 0);
-        servo_action_set(3, 180); servo_action_set(4, 180);
-    }
-    else if (strcmp(action, "stand")  == 0) {
-        servo_action_set(1, POS1_NEUTRAL); servo_action_set(2, POS2_NEUTRAL);
-        servo_action_set(3, POS3_NEUTRAL); servo_action_set(4, POS4_NEUTRAL);
-    }
+    else if (strcmp(action, "lay")    == 0 || strcmp(action, "lie") == 0) dog_action_send("lay");
+    else if (strcmp(action, "stand")  == 0) dog_action_send("stand");
     else if (strcmp(action, "walk_fwd") == 0) dog_action_send("forward");
     else if (strcmp(action, "walk_bwd") == 0) dog_action_send("backward");
+    else if (strcmp(action, "bow") == 0) dog_action_send("bow");
+    else if (strcmp(action, "lean") == 0) dog_action_send("lean");
+    else if (strcmp(action, "wiggle") == 0) dog_action_send("wiggle");
+    else if (strcmp(action, "rock") == 0) dog_action_send("rock");
+    else if (strcmp(action, "sway") == 0) dog_action_send("sway");
+    else if (strcmp(action, "shake") == 0) dog_action_send("shake");
+    else if (strcmp(action, "poke") == 0) dog_action_send("poke");
+    else if (strcmp(action, "kick") == 0) dog_action_send("kick");
+    else if (strcmp(action, "jumpfwd") == 0 || strcmp(action, "jump_fwd") == 0) dog_action_send("jump_fwd");
+    else if (strcmp(action, "jumpbck") == 0 || strcmp(action, "jump_bwd") == 0) dog_action_send("jump_bwd");
     // tts:<text> — push text to SSE clients for browser-side synthesis
     else if (strncmp(action, "tts:", 4) == 0) sse_broadcast_tts(action + 4);
     else ESP_LOGW("ACTION", "Unknown action: %s", action);
@@ -823,7 +827,7 @@ void webserver_start(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
     config.server_port      = WEB_SERVER_PORT;
-    config.max_uri_handlers = 40;     // increased for new endpoints
+    config.max_uri_handlers = 64;     // increased for new endpoints
     config.recv_wait_timeout  = 30;
     config.send_wait_timeout  = 10;
     config.stack_size = 8192;
@@ -887,9 +891,22 @@ void webserver_start(void) {
         { "/bark",      HTTP_GET,  quick_action_handler,   NULL },
         { "/paulbot",   HTTP_GET,  quick_action_handler,   NULL },
         { "/lay",       HTTP_GET,  quick_action_handler,   NULL },
+        { "/lie",       HTTP_GET,  quick_action_handler,   NULL },
         { "/stand",     HTTP_GET,  quick_action_handler,   NULL },
         { "/walk_fwd",  HTTP_GET,  quick_action_handler,   NULL },
         { "/walk_bwd",  HTTP_GET,  quick_action_handler,   NULL },
+        { "/bow",       HTTP_GET,  quick_action_handler,   NULL },
+        { "/lean",      HTTP_GET,  quick_action_handler,   NULL },
+        { "/wiggle",    HTTP_GET,  quick_action_handler,   NULL },
+        { "/rock",      HTTP_GET,  quick_action_handler,   NULL },
+        { "/sway",      HTTP_GET,  quick_action_handler,   NULL },
+        { "/shake",     HTTP_GET,  quick_action_handler,   NULL },
+        { "/poke",      HTTP_GET,  quick_action_handler,   NULL },
+        { "/kick",      HTTP_GET,  quick_action_handler,   NULL },
+        { "/jumpfwd",   HTTP_GET,  quick_action_handler,   NULL },
+        { "/jumpbck",   HTTP_GET,  quick_action_handler,   NULL },
+        { "/jump_fwd",  HTTP_GET,  quick_action_handler,   NULL },
+        { "/jump_bwd",  HTTP_GET,  quick_action_handler,   NULL },
 #ifdef WS2812_NUM_LEDS
         { "/audio",     HTTP_POST, audio_post_handler,     NULL },
         { "/audio",     HTTP_OPTIONS, cors_options_handler,NULL },
