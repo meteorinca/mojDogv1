@@ -2,9 +2,12 @@
 
 #ifdef WS2812_NUM_LEDS
 #include "ws2812.h"
-#include "dog_peripherals.h"
 #else
 #include "led.h"
+#endif
+
+#ifdef DISP_MOSI_GPIO
+#include "dog_peripherals.h"
 #endif
 #include "servo.h"
 #include "dog_actions.h"
@@ -19,7 +22,7 @@
 #include "rf.h"
 #endif
 
-#ifdef WS2812_NUM_LEDS
+#ifdef DISP_MOSI_GPIO
 static void startup_audio_task(void *arg) {
     EventGroupHandle_t wifi_events = (EventGroupHandle_t)arg;
     xEventGroupWaitBits(wifi_events, WIFI_CONNECTED_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
@@ -41,7 +44,7 @@ void app_main(void) {
     led_init();
     servo_init();
 
-#ifdef WS2812_NUM_LEDS
+#ifdef DISP_MOSI_GPIO
     dog_peripherals_init();
 #endif
 
@@ -68,7 +71,7 @@ void app_main(void) {
     // Background tasks
     led_start_heartbeat(wifi_events, WIFI_CONNECTED_BIT);
 
-#ifdef WS2812_NUM_LEDS
+#ifdef DISP_MOSI_GPIO
     // Play startup audio message after wifi connects
     xTaskCreate(startup_audio_task, "startup_audio", 4096, wifi_events, 5, NULL);
 #endif

@@ -68,11 +68,30 @@ void led_action_toggle(void) {
     led_action_set(!g_led_state);
 }
 
+#include "ota_mgr.h"
+
 // ── Heartbeat task ──
 static void led_heartbeat_task(void *pvParameters) {
     uint32_t max_duty = 8191;
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(20));
+
+        // ── OTA Visual Feedback ──
+        if (g_ota_state == OTA_STATE_ACTIVE) {
+            // Rapid strobe during flashing
+            bool strobe = (esp_timer_get_time() / 50000) % 2; // 50ms toggle
+            led_set(strobe);
+            continue;
+        } else if (g_ota_state == OTA_STATE_SUCCESS) {
+            // Solid ON for success
+            led_set(true);
+            continue;
+        } else if (g_ota_state == OTA_STATE_FAILED) {
+            // Very fast panic blink
+            bool panic = (esp_timer_get_time() / 100000) % 2; // 100ms toggle
+            led_set(panic);
+            continue;
+        }
 
         if (esp_timer_get_time() - s_last_manual_time < LED_MANUAL_OVERRIDE_US) {
             continue;

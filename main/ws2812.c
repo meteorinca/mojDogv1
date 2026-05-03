@@ -5,6 +5,7 @@
 
 #include "ws2812.h"
 #include "config.h"
+#include "ota_mgr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "led_strip.h"          // espressif/led_strip component
@@ -123,9 +124,49 @@ void ws2812_clear(void) {
 
 // ── Heartbeat task ────────────────────────────────────────────────────────────
 static void ws2812_heartbeat_task(void *pvParameters) {
+    int ota_fail_ticks = 0;   // countdown for OTA_FAILED display (~5 s)
+
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(20));
 
+        // ── OTA state takes priority over everything ──────────────────────
+        ota_state_t ota = g_ota_state;
+
+        if (ota == OTA_STATE_ACTIVE) {
+            // Cyan rapid strobe ~10 Hz (50 ms on / 50 ms off cycling across LEDs)
+            int64_t t_ms = esp_timer_get_time() / 1000;
+            bool phase = (t_ms / 50) & 1;
+            strip_fill(phase ? 0x000A0A : 0);    // dim cyan
+            continue;
+        }
+
+        if (ota == OTA_STATE_SUCCESS) {
+            // Green triple-flash then hold off (restart is imminent anyway)
+            for (int flash = 0; flash < 3; flash++) {
+                strip_fill(0x00200A);             // dim green
+                vTaskDelay(pdMS_TO_TICKS(150));
+                strip_fill(0);
+                vTaskDelay(pdMS_TO_TICKS(100));
+            }
+            vTaskDelay(pdMS_TO_TICKS(500));       // brief pause before reboot
+            continue;
+        }
+
+        if (ota == OTA_STATE_FAILED) {
+            // Fast red blink for ~5 s then auto-revert to IDLE
+            ota_fail_ticks++;
+            int64_t t_ms = esp_timer_get_time() / 1000;
+            bool phase = (t_ms / 100) & 1;       // 5 Hz blink
+            strip_fill(phase ? 0x200000 : 0);
+            if (ota_fail_ticks > 250) {           // 250 × 20 ms = 5 s
+                g_ota_state   = OTA_STATE_IDLE;
+                ota_fail_ticks = 0;
+            }
+            continue;
+        }
+        ota_fail_ticks = 0;   // reset on IDLE
+
+        // ── Normal WiFi heartbeat ─────────────────────────────────────────
         // Manual override: suppress heartbeat for LED_MANUAL_OVERRIDE_US
         if (esp_timer_get_time() - s_last_manual_time < LED_MANUAL_OVERRIDE_US) {
             continue;

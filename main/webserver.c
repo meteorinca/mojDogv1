@@ -3,17 +3,21 @@
 // WS2812 boards define WS2812_NUM_LEDS; simple LED boards define LED_GPIO
 #ifdef WS2812_NUM_LEDS
 #include "ws2812.h"
-#include "dog_peripherals.h"
 #else
 #include "led.h"
+#endif
+
+#ifdef DISP_MOSI_GPIO
+#include "dog_peripherals.h"
 #endif
 #include "servo.h"
 #include "timekeep.h"
 #include "dog_actions.h"
+#include "ota_mgr.h"
 
 #include <string.h>
 #include <stdio.h>
-
+#include "esp_system.h"
 // rf.h is only present when board has an RF module
 #ifdef RF_RX_GPIO
 #include "rf.h"
@@ -21,8 +25,6 @@
 #include <stdlib.h>
 #include "esp_log.h"
 #include "esp_http_server.h"
-#include "esp_http_client.h"
-#include "cJSON.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -259,7 +261,17 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
         "<button class='btn-primary' onclick='sendTTS()'>Speak</button>"
         "<div class='err-msg' id='tts-err'></div>"
         "</div>"
-        
+
+        "<div class='card'>"
+        "<h2>OTA Firmware Update</h2>"
+        "<input type='file' id='ota-file' accept='.bin' style='color:#a0a0d0;margin-bottom:10px;width:100%;'>"
+        "<div style='background:#0a0a1e;border-radius:6px;height:8px;margin-bottom:8px;overflow:hidden;'>"
+        "<div id='ota-bar' style='width:0%;height:100%;background:linear-gradient(90deg,#00e5a0,#7c6af7);transition:width .3s;'></div>"
+        "</div>"
+        "<button class='btn-primary' id='ota-btn' onclick='doOTA()'>Flash Firmware</button>"
+        "<div class='err-msg' id='ota-msg'></div>"
+        "</div>"
+
         "</div>"
         /* ── CALIBRATION SECTION (Hidden by default, can be toggled) ── */
         "<button onclick=\"document.getElementById('panel-cal').style.display='block'\" style='margin-top:20px; background:none; border:none; color:#666; text-decoration:underline;'>Show Calibration</button>"
@@ -312,7 +324,7 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
         "var ACTIONS={"
         "'1':'Lie','2':'Bow','3':'Lean','4':'Wiggle',"
         "'5':'Rock','6':'Sway','7':'Shake','8':'Poke',"
-        "'9':'Kick','10':'Jump→','11':'←Jump','12':'Stand'};"
+        "'9':'Kick','10':'JumpFw','11':'JumpBw','12':'Stand'};"
         "(function(){"
         "var g=document.getElementById('action-grid');"
         "for(var k in ACTIONS){"
@@ -415,6 +427,48 @@ static esp_err_t root_get_handler(httpd_req_t *req) {
         "}"
         "document.getElementById('btn-minus').onclick=function(){doAdj(-1);};"
         "document.getElementById('btn-plus').onclick=function(){doAdj(1);};"
+        /* OTA upload — XHR for progress events */
+        "function doOTA(){"
+        "var f=document.getElementById('ota-file').files[0];"
+        "var msg=document.getElementById('ota-msg');"
+        "var bar=document.getElementById('ota-bar');"
+        "var btn=document.getElementById('ota-btn');"
+        "if(!f){msg.textContent='Pick a .bin file first';return;}"
+        "btn.disabled=true;btn.style.opacity='.5';"
+        "msg.style.color='#a0a0d0';msg.textContent='Uploading '+f.name+' ('+Math.round(f.size/1024)+'KB)...';"
+        "bar.style.width='0%';"
+        "var xhr=new XMLHttpRequest();"
+        "xhr.open('POST','/ota',true);"
+        "xhr.setRequestHeader('Content-Type','application/octet-stream');"
+        "xhr.upload.onprogress=function(e){"
+        "  if(e.lengthComputable){"
+        "    var pct=Math.round(e.loaded/e.total*100);"
+        "    bar.style.width=pct+'%';"
+        "    msg.textContent='Uploading... '+pct+'%';"
+        "  }"
+        "};"
+        "xhr.onload=function(){"
+        "  bar.style.width='100%';"
+        "  if(xhr.status===200){"
+        "    msg.style.color='#00e5a0';"
+        "    var t=10;"
+        "    var iv=setInterval(function(){"
+        "      msg.textContent='OTA OK! Rebooting... reload in '+t+'s';"
+        "      if(--t<0){clearInterval(iv);location.reload();}"
+        "    },1000);"
+        "  } else {"
+        "    msg.style.color='#f7736a';"
+        "    msg.textContent='OTA failed: HTTP '+xhr.status;"
+        "    btn.disabled=false;btn.style.opacity='1';"
+        "  }"
+        "};"
+        "xhr.onerror=function(){"
+        "  msg.style.color='#f7736a';"
+        "  msg.textContent='Upload error';"
+        "  btn.disabled=false;btn.style.opacity='1';"
+        "};"
+        "xhr.send(f);"
+        "}"
         "</script></body></html>";
 
     httpd_resp_set_type(req, "text/html");
@@ -546,16 +600,13 @@ static esp_err_t time_handler(httpd_req_t *req) {
 }
 
 static esp_err_t status_handler(httpd_req_t *req) {
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "status", "running");
-    cJSON_AddStringToObject(root, "version", FW_VERSION);
-    cJSON_AddNumberToObject(root, "epoch", (double)timekeep_now());
-    cJSON_AddBoolToObject(root, "time_synced", timekeep_is_synced());
-    char *json = cJSON_PrintUnformatted(root);
+    char resp[128];
+    int len = snprintf(resp, sizeof(resp),
+        "{\"status\":\"running\",\"version\":\"%s\",\"epoch\":%lld,\"time_synced\":%s}",
+        FW_VERSION, (long long)timekeep_now(),
+        timekeep_is_synced() ? "true" : "false");
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
-    free(json);
-    cJSON_Delete(root);
+    httpd_resp_send(req, resp, len);
     return ESP_OK;
 }
 
@@ -656,6 +707,11 @@ static esp_err_t sync_time_handler(httpd_req_t *req) {
 }
 
 // ── GitHub SPEAKTHISDOG.txt polling task ─────────────────────────────────────
+// Gate behind ENABLE_GITHUB_TTS (defined in board_config.h).
+// When disabled: saves ~8KB flash (esp_http_client) + 8KB task stack RAM.
+#ifdef ENABLE_GITHUB_TTS
+#include "esp_http_client.h"
+
 #define GITHUB_TTS_URL "https://raw.githubusercontent.com/meteorinca/mojDogv1/refs/heads/main/SPEAKTHISDOG.txt"
 
 static char s_last_spoken[256] = {0}; // avoid re-speaking same text
@@ -718,6 +774,7 @@ static void github_tts_task(void *arg) {
         }
     }
 }
+#endif // ENABLE_GITHUB_TTS
 
 // /schedule — queue an action at an exact wall-clock time or relative delay.
 //
@@ -785,7 +842,7 @@ static esp_err_t schedule_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-#ifdef WS2812_NUM_LEDS
+#ifdef DISP_MOSI_GPIO
 static esp_err_t audio_post_handler(httpd_req_t *req) {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
 
@@ -814,6 +871,75 @@ static esp_err_t audio_post_handler(httpd_req_t *req) {
 #endif
 
 // ══════════════════════════════════════════════════════════════
+//  OTA firmware update handler  POST /ota
+//
+//  Client sends the raw .bin file as the request body.
+//  Use from shell / Jupyter:
+//    import requests
+//    with open('mojDogv1.bin','rb') as f:
+//        requests.post('http://dogbot2.local:81/ota', data=f,
+//                      headers={'Content-Type':'application/octet-stream'})
+//
+//  Or from the web UI (added below in root_get_handler HTML).
+// ══════════════════════════════════════════════════════════════
+#define OTA_BUF_SIZE 4096
+
+static esp_err_t ota_post_handler(httpd_req_t *req) {
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+
+    int total = req->content_len;
+    if (total <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No firmware data");
+        return ESP_FAIL;
+    }
+    ESP_LOGI("OTA", "Incoming firmware: %d bytes", total);
+
+    ota_handle_t h = {0};
+    if (ota_begin(&h) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA begin failed");
+        return ESP_FAIL;
+    }
+
+    static char buf[OTA_BUF_SIZE];   // static: avoids 4KB stack hit per request
+    int remaining = total;
+    while (remaining > 0) {
+        int to_read = remaining < OTA_BUF_SIZE ? remaining : OTA_BUF_SIZE;
+        int received = httpd_req_recv(req, buf, to_read);
+        if (received == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (received <= 0) {
+            ESP_LOGE("OTA", "recv error (%d), aborting", received);
+            ota_abort(&h);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Receive error");
+            return ESP_FAIL;
+        }
+        if (ota_write(&h, buf, received) != ESP_OK) {
+            ota_abort(&h);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Flash write error");
+            return ESP_FAIL;
+        }
+        remaining -= received;
+        // Log progress every ~64KB
+        if (((total - remaining) % 65536) < OTA_BUF_SIZE) {
+            ESP_LOGI("OTA", "Progress: %d / %d bytes", total - remaining, total);
+        }
+    }
+
+    if (ota_end(&h) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA validation failed");
+        return ESP_FAIL;
+    }
+
+    // Send success response before restarting so the client sees it
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, "{\"ota\":\"ok\",\"restart\":true}", HTTPD_RESP_USE_STRLEN);
+
+    // Brief delay so TCP ACK reaches the client
+    vTaskDelay(pdMS_TO_TICKS(1500));
+    esp_restart();
+    return ESP_OK; // unreachable
+}
+
+// ══════════════════════════════════════════════════════════════
 //  Server startup
 // ══════════════════════════════════════════════════════════════
 void webserver_start(void) {
@@ -827,8 +953,8 @@ void webserver_start(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
     config.server_port      = WEB_SERVER_PORT;
-    config.max_uri_handlers = 64;     // increased for new endpoints
-    config.recv_wait_timeout  = 30;
+    config.max_uri_handlers = 66;     // increased for new endpoints (incl. /ota x2)
+    config.recv_wait_timeout  = 300;  // 300 s — allows large OTA binary uploads
     config.send_wait_timeout  = 10;
     config.stack_size = 8192;
     config.uri_match_fn = httpd_uri_match_wildcard; // enables /s1_* /sendtts:* patterns
@@ -907,10 +1033,13 @@ void webserver_start(void) {
         { "/jumpbck",   HTTP_GET,  quick_action_handler,   NULL },
         { "/jump_fwd",  HTTP_GET,  quick_action_handler,   NULL },
         { "/jump_bwd",  HTTP_GET,  quick_action_handler,   NULL },
-#ifdef WS2812_NUM_LEDS
+#ifdef DISP_MOSI_GPIO
         { "/audio",     HTTP_POST, audio_post_handler,     NULL },
         { "/audio",     HTTP_OPTIONS, cors_options_handler,NULL },
 #endif
+        // OTA firmware update — POST the raw .bin file body
+        { "/ota",       HTTP_POST, ota_post_handler,       NULL },
+        { "/ota",       HTTP_OPTIONS, cors_options_handler,NULL },
 
     };
     for (int i = 0; i < (int)(sizeof(uris) / sizeof(uris[0])); i++) {
@@ -926,8 +1055,10 @@ void webserver_start(void) {
     };
     httpd_register_uri_handler(s_server, &sendtts_uri);
 
+#ifdef ENABLE_GITHUB_TTS
     // GitHub SPEAKTHISDOG.txt polling task (8KB stack — uses esp_http_client)
     xTaskCreate(github_tts_task, "gh_tts", 8192, NULL, 2, NULL);
+#endif
 
     ESP_LOGI("WEB", "HTTP server on port %d", config.server_port);
 }

@@ -21,7 +21,7 @@
 #define MDNS_INSTANCE       "MOJDogv" _STR(DEVICE_NUMBER)
 
 #define WEB_SERVER_PORT     81
-#define DISABLE_OTA         1
+#define DISABLE_OTA         0
 
 // ── Network ─────────────────────────────────────────────────────────────────
 #include "secrets.h"           // provides WIFI_SSID, WIFI_PASS
@@ -30,18 +30,18 @@
 #define NTP_SERVER          "pool.ntp.org"
 #define TIMEZONE            "CST6CDT,M3.2.0,M11.1.0"   // US Central
 
-// ── WS2812 NeoPixel strip (GPIO 8, RMT) ─────────────────────────────────────
-//  This board has NO simple GPIO LED — the strip is the only visual indicator.
-//  ws2812.c provides led_init / led_action_set / led_start_heartbeat with the
-//  same API as led.c so the rest of the codebase is unchanged.
-#define WS2812_GPIO             GPIO_NUM_8
-#define WS2812_NUM_LEDS         4
-#define WS2812_RMT_RES_HZ       10000000    // 10 MHz — standard for WS2812
+// ── LED (GPIO 8, simple GPIO/LEDC) ──────────────────────────────────────────
+#define LED_GPIO                GPIO_NUM_8
+#define LED_ACTIVE_LOW          1       // HIGH = OFF
 
-// Heartbeat colours
-#define WS2812_COLOR_CONNECTED  0x000A00    // dim green  (wifi ok, breathing)
-#define WS2812_COLOR_DISCO      0x0A0000    // dim red    (no wifi, double-pulse)
-#define WS2812_COLOR_ACTION     0x00000A    // dim blue   (servo / manual command)
+// ── WS2812 NeoPixel strip (DISABLED) ────────────────────────────────────────
+// #define WS2812_GPIO             GPIO_NUM_8
+// #define WS2812_NUM_LEDS         4
+
+// Heartbeat colours (legacy for code that uses these names, but simple LED is single color)
+#define WS2812_COLOR_CONNECTED  0x000A00    // dim green
+#define WS2812_COLOR_DISCO      0x0A0000    // dim red
+#define WS2812_COLOR_ACTION     0x00000A    // dim blue
 
 // How long a manual command suppresses the heartbeat (microseconds)
 #define LED_MANUAL_OVERRIDE_US  4000000     // 4 s

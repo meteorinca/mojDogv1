@@ -8,19 +8,27 @@ set(COMMON_SRCS
     "wifi_mgr.c"
     "timekeep.c"
     "webserver.c"
+    "ota_mgr.c"
     "touch_input.c"   # safe on all chips — SOC guard inside makes it a no-op on C3
 )
 
-# ── Board-conditional sources ─────────────────────────────────────────────────
 # Boards that use a WS2812/NeoPixel strip instead of a simple GPIO LED
-set(WS2812_BOARDS "esp32c3_dog")
+set(WS2812_BOARDS "")
+
+# Boards that have the OLED display and audio peripherals (dog_peripherals.c)
+set(DISPLAY_BOARDS "esp32c3_dog")
 
 if(BOARD IN_LIST WS2812_BOARDS)
-    list(APPEND CONDITIONAL_SRCS "ws2812.c" "dog_peripherals.c")
-    message(STATUS "  [main] LED driver: ws2812.c (NeoPixel RMT) + dog_peripherals")
+    list(APPEND CONDITIONAL_SRCS "ws2812.c")
+    message(STATUS "━━━ [main] LED driver: ws2812.c (NeoPixel RMT) ━━━")
 else()
     list(APPEND CONDITIONAL_SRCS "led.c")
-    message(STATUS "  [main] LED driver: led.c (simple GPIO/LEDC)")
+    message(STATUS "━━━ [main] LED driver: led.c (simple GPIO/LEDC) ━━━")
+endif()
+
+if(BOARD IN_LIST DISPLAY_BOARDS)
+    list(APPEND CONDITIONAL_SRCS "dog_peripherals.c")
+    message(STATUS "━━━ [main] Display & Audio peripherals: ENABLED ━━━")
 endif()
 
 
@@ -43,20 +51,18 @@ idf_component_register(
                     led_strip
                     esp_driver_rmt
                     esp_driver_touch_sens
+                    esp_lcd
     PRIV_REQUIRES   esp_driver_gpio
                     esp_driver_ledc
                     esp_wifi
                     esp_event
                     esp_netif
                     esp_timer
-                    esp_adc
                     nvs_flash
                     esp_http_server
-                    esp_http_client
-                    json
                     mdns
                     driver
                     esp_app_format
-                    esp_lcd
-                    ${CONDITIONAL_REQ}
+                    app_update
+                    esp_adc
 )

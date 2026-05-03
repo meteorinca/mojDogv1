@@ -4,7 +4,7 @@
 #include "paulbot_audio.h"
 #include "font5x7.h"
 
-#ifdef WS2812_NUM_LEDS
+#ifdef DISP_MOSI_GPIO
 
 #include "esp_log.h"
 #include "driver/gpio.h"
